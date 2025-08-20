@@ -25,7 +25,7 @@ type Provider struct {
 func New(ctx context.Context, cfg *Config) (*Provider, error) {
 	// Skip if disabled
 	if !cfg.Enabled {
-		return nil, nil
+		return &Provider{}, nil
 	}
 
 	// Validate required configuration
