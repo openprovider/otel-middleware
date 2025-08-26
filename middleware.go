@@ -18,6 +18,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// Helper function to check if a parent trace context exists
+func hasParentTrace(ctx context.Context) bool {
+	spanCtx := trace.SpanContextFromContext(ctx)
+	return spanCtx.IsValid() && spanCtx.HasTraceID()
+}
+
+// Helper function to check if extracted context has a valid trace
+func hasValidTraceContext(extractedCtx context.Context) bool {
+	spanCtx := trace.SpanContextFromContext(extractedCtx)
+	return spanCtx.IsValid() && spanCtx.HasTraceID()
+}
+
 // gRPC Server Interceptor for OpenTelemetry
 func GRPCUnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(
@@ -28,11 +40,17 @@ func GRPCUnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	) (interface{}, error) {
 		// Extract trace context from incoming metadata
 		md, _ := metadata.FromIncomingContext(ctx)
-		ctx = otel.GetTextMapPropagator().Extract(ctx, metadataTextMapCarrier(md))
+		extractedCtx := otel.GetTextMapPropagator().Extract(ctx, metadataTextMapCarrier(md))
 
-		// Create span
+		// Only create spans if there's a valid parent trace context
+		if !hasValidTraceContext(extractedCtx) {
+			log.Printf("No parent trace found for gRPC method %s, skipping tracing", info.FullMethod)
+			return handler(ctx, req)
+		}
+
+		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("grpc-server").Start(
-			ctx,
+			extractedCtx,
 			info.FullMethod,
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -82,11 +100,17 @@ func GRPCStreamServerInterceptor() grpc.StreamServerInterceptor {
 
 		// Extract trace context from incoming metadata
 		md, _ := metadata.FromIncomingContext(ctx)
-		ctx = otel.GetTextMapPropagator().Extract(ctx, metadataTextMapCarrier(md))
+		extractedCtx := otel.GetTextMapPropagator().Extract(ctx, metadataTextMapCarrier(md))
 
-		// Create span
+		// Only create spans if there's a valid parent trace context
+		if !hasValidTraceContext(extractedCtx) {
+			log.Printf("No parent trace found for gRPC stream method %s, skipping tracing", info.FullMethod)
+			return handler(srv, stream)
+		}
+
+		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("grpc-server").Start(
-			ctx,
+			extractedCtx,
 			info.FullMethod,
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -134,11 +158,20 @@ func GRPCStreamServerInterceptor() grpc.StreamServerInterceptor {
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract trace context from headers
-		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		log.Println("HTTP request received:", r.Method, r.URL.Path)
-		// Create span
+		extractedCtx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		
+		// Only create spans if there's a valid parent trace context
+		if !hasValidTraceContext(extractedCtx) {
+			log.Printf("No parent trace found for HTTP %s %s, skipping tracing", r.Method, r.URL.Path)
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		log.Printf("Parent trace found for HTTP %s %s, creating span", r.Method, r.URL.Path)
+		
+		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("http-server").Start(
-			ctx,
+			extractedCtx,
 			fmt.Sprintf("%s %s", r.Method, r.URL.Path),
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -235,6 +268,12 @@ func GRPCUnaryClientInterceptor() grpc.UnaryClientInterceptor {
 		invoker grpc.UnaryInvoker,
 		opts ...grpc.CallOption,
 	) error {
+		// Only create spans and inject context if there's an active trace
+		if !hasParentTrace(ctx) {
+			log.Printf("No active trace for gRPC client call %s, skipping tracing", method)
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+
 		// Create span for outbound call
 		ctx, span := otel.Tracer("grpc-client").Start(
 			ctx,
@@ -290,6 +329,12 @@ func GRPCStreamClientInterceptor() grpc.StreamClientInterceptor {
 		streamer grpc.Streamer,
 		opts ...grpc.CallOption,
 	) (grpc.ClientStream, error) {
+		// Only create spans and inject context if there's an active trace
+		if !hasParentTrace(ctx) {
+			log.Printf("No active trace for gRPC stream client call %s, skipping tracing", method)
+			return streamer(ctx, desc, cc, method, opts...)
+		}
+
 		// Create span for outbound call
 		ctx, span := otel.Tracer("grpc-client").Start(
 			ctx,
@@ -328,8 +373,15 @@ func GRPCStreamClientInterceptor() grpc.StreamClientInterceptor {
 
 // HTTP Client instrumentation helper
 func InjectHTTPHeaders(req *http.Request) {
+	// Only inject trace context if there's an active trace
+	if !hasParentTrace(req.Context()) {
+		log.Printf("No active trace for HTTP client request %s %s, skipping header injection", req.Method, req.URL.Path)
+		return
+	}
+	
 	// Inject trace context into HTTP headers
 	otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
+	log.Printf("Injected trace context into HTTP request %s %s", req.Method, req.URL.Path)
 }
 
 // Helper for client stream
