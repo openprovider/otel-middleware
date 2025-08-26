@@ -44,7 +44,6 @@ func GRPCUnaryServerInterceptor() grpc.UnaryServerInterceptor {
 
 		// Only create spans if there's a valid parent trace context
 		if !hasValidTraceContext(extractedCtx) {
-			log.Printf("No parent trace found for gRPC method %s, skipping tracing", info.FullMethod)
 			return handler(ctx, req)
 		}
 
@@ -104,7 +103,6 @@ func GRPCStreamServerInterceptor() grpc.StreamServerInterceptor {
 
 		// Only create spans if there's a valid parent trace context
 		if !hasValidTraceContext(extractedCtx) {
-			log.Printf("No parent trace found for gRPC stream method %s, skipping tracing", info.FullMethod)
 			return handler(srv, stream)
 		}
 
@@ -162,12 +160,9 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		
 		// Only create spans if there's a valid parent trace context
 		if !hasValidTraceContext(extractedCtx) {
-			log.Printf("No parent trace found for HTTP %s %s, skipping tracing", r.Method, r.URL.Path)
 			next.ServeHTTP(w, r)
 			return
 		}
-
-		log.Printf("Parent trace found for HTTP %s %s, creating span", r.Method, r.URL.Path)
 		
 		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("http-server").Start(
@@ -270,7 +265,6 @@ func GRPCUnaryClientInterceptor() grpc.UnaryClientInterceptor {
 	) error {
 		// Only create spans and inject context if there's an active trace
 		if !hasParentTrace(ctx) {
-			log.Printf("No active trace for gRPC client call %s, skipping tracing", method)
 			return invoker(ctx, method, req, reply, cc, opts...)
 		}
 
@@ -331,7 +325,6 @@ func GRPCStreamClientInterceptor() grpc.StreamClientInterceptor {
 	) (grpc.ClientStream, error) {
 		// Only create spans and inject context if there's an active trace
 		if !hasParentTrace(ctx) {
-			log.Printf("No active trace for gRPC stream client call %s, skipping tracing", method)
 			return streamer(ctx, desc, cc, method, opts...)
 		}
 
@@ -375,13 +368,11 @@ func GRPCStreamClientInterceptor() grpc.StreamClientInterceptor {
 func InjectHTTPHeaders(req *http.Request) {
 	// Only inject trace context if there's an active trace
 	if !hasParentTrace(req.Context()) {
-		log.Printf("No active trace for HTTP client request %s %s, skipping header injection", req.Method, req.URL.Path)
 		return
 	}
 	
 	// Inject trace context into HTTP headers
 	otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
-	log.Printf("Injected trace context into HTTP request %s %s", req.Method, req.URL.Path)
 }
 
 // Helper for client stream
