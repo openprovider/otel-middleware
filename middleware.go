@@ -3,7 +3,6 @@ package otel
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"net/http"
@@ -157,13 +156,13 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract trace context from headers
 		extractedCtx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		
+
 		// Only create spans if there's a valid parent trace context
 		if !hasValidTraceContext(extractedCtx) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("http-server").Start(
 			extractedCtx,
@@ -370,7 +369,7 @@ func InjectHTTPHeaders(req *http.Request) {
 	if !hasParentTrace(req.Context()) {
 		return
 	}
-	
+
 	// Inject trace context into HTTP headers
 	otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
 }
