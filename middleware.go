@@ -39,16 +39,16 @@ func GRPCUnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	) (interface{}, error) {
 		// Extract trace context from incoming metadata
 		md, _ := metadata.FromIncomingContext(ctx)
-		extractedCtx := otel.GetTextMapPropagator().Extract(ctx, metadataTextMapCarrier(md))
+		spanCtx, shouldTrace := getSpanContext(ctx, metadataTextMapCarrier(md))
 
 		// Only create spans if there's a valid parent trace context
-		if !hasValidTraceContext(extractedCtx) {
+		if !shouldTrace {
 			return handler(ctx, req)
 		}
 
 		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("grpc-server").Start(
-			extractedCtx,
+			spanCtx,
 			info.FullMethod,
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -98,16 +98,16 @@ func GRPCStreamServerInterceptor() grpc.StreamServerInterceptor {
 
 		// Extract trace context from incoming metadata
 		md, _ := metadata.FromIncomingContext(ctx)
-		extractedCtx := otel.GetTextMapPropagator().Extract(ctx, metadataTextMapCarrier(md))
+		spanCtx, shouldTrace := getSpanContext(ctx, metadataTextMapCarrier(md))
 
 		// Only create spans if there's a valid parent trace context
-		if !hasValidTraceContext(extractedCtx) {
+		if !shouldTrace {
 			return handler(srv, stream)
 		}
 
 		// Create span only when parent trace exists
 		ctx, span := otel.Tracer("grpc-server").Start(
-			extractedCtx,
+			spanCtx,
 			info.FullMethod,
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -155,17 +155,16 @@ func GRPCStreamServerInterceptor() grpc.StreamServerInterceptor {
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract trace context from headers
-		extractedCtx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		spanCtx, shouldTrace := getSpanContext(r.Context(), propagation.HeaderCarrier(r.Header))
 
-		// Only create spans if there's a valid parent trace context
-		if !hasValidTraceContext(extractedCtx) {
+		if !shouldTrace {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Create span only when parent trace exists
+		// Create span (either continuing parent or as root)
 		ctx, span := otel.Tracer("http-server").Start(
-			extractedCtx,
+			spanCtx,
 			fmt.Sprintf("%s %s", r.Method, r.URL.Path),
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -372,6 +371,26 @@ func InjectHTTPHeaders(req *http.Request) {
 
 	// Inject trace context into HTTP headers
 	otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
+}
+
+func getSpanContext(ctx context.Context, carrier propagation.TextMapCarrier) (context.Context, bool) {
+	extractedCtx := otel.GetTextMapPropagator().Extract(ctx, carrier)
+
+	// Determine if we should create a span:
+	// 1. If there's a valid parent trace context - continue the trace
+	// 2. If AlwaysSample is true - create a root span even without parent
+	shouldTrace := hasValidTraceContext(extractedCtx) || IsAlwaysSampleEnabled()
+
+	if !shouldTrace {
+		return ctx, false
+	}
+
+	// Use extractedCtx if parent exists, otherwise use original context for root span
+	spanCtx := extractedCtx
+	if !hasValidTraceContext(extractedCtx) && IsAlwaysSampleEnabled() {
+		spanCtx = ctx // This will create a root span
+	}
+	return spanCtx, true
 }
 
 // Helper for client stream
