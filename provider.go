@@ -16,6 +16,22 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 )
 
+// globalConfig stores the configuration globally so middleware can access it
+var globalConfig *Config
+
+// GetGlobalConfig returns the globally stored configuration
+func GetGlobalConfig() *Config {
+	return globalConfig
+}
+
+// IsAlwaysSampleEnabled checks if AlwaysSample is enabled in the global config
+func IsAlwaysSampleEnabled() bool {
+	if globalConfig == nil {
+		return false
+	}
+	return globalConfig.AlwaysSample
+}
+
 type Provider struct {
 	cfg           *Config
 	traceProvider *sdktrace.TracerProvider
@@ -23,6 +39,9 @@ type Provider struct {
 
 // New initializes OpenTelemetry tracing
 func New(ctx context.Context, cfg *Config) (*Provider, error) {
+	// Store config globally so middleware can access it
+	globalConfig = cfg
+	
 	// Skip if disabled
 	if !cfg.Enabled {
 		return &Provider{}, nil

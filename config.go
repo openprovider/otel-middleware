@@ -11,4 +11,5 @@ type Config struct {
 	Headers        string  `json:"headers" mapstructure:"headers"`
 	BatchTimeout   int     `json:"batchTimeout" mapstructure:"batchTimeout"`
 	SamplingRate   float64 `json:"samplingRate" mapstructure:"samplingRate"`
+	AlwaysSample   bool    `json:"alwaysSample" mapstructure:"alwaysSample"`
 }
