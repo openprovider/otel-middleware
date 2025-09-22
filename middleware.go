@@ -3,6 +3,7 @@ package otel
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"net/http"
@@ -27,6 +28,35 @@ func hasParentTrace(ctx context.Context) bool {
 func hasValidTraceContext(extractedCtx context.Context) bool {
 	spanCtx := trace.SpanContextFromContext(extractedCtx)
 	return spanCtx.IsValid() && spanCtx.HasTraceID()
+}
+
+// PathNormalizationRule defines a pattern and its replacement for URL normalization
+type PathNormalizationRule struct {
+	Pattern     string
+	Replacement string
+}
+
+var pathNormalizationRules = map[string][]PathNormalizationRule{
+	"rdap-server": {
+		{"/v1/domain/", "/v1/domain/{domain}"},
+		{"/v1/nameserver/", "/v1/nameserver/{nameserver}"},
+	},
+}
+
+// normalizeURLPath normalizes URL paths for better trace grouping
+// Only applies normalization for specific services that opt-in
+func normalizeURLPath(path string) string {
+	// Only normalize paths for rdap-server service
+	if globalConfig != nil && pathNormalizationRules[globalConfig.ServiceName] != nil {
+		for _, rule := range pathNormalizationRules[globalConfig.ServiceName] {
+			if strings.HasPrefix(path, rule.Pattern) {
+				return rule.Replacement
+			}
+		}
+	}
+
+	// For other services or paths, return as-is
+	return path
 }
 
 // gRPC Server Interceptor for OpenTelemetry
@@ -163,13 +193,15 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Create span (either continuing parent or as root)
+		normalizedPath := normalizeURLPath(r.URL.Path)
 		ctx, span := otel.Tracer("http-server").Start(
 			spanCtx,
-			fmt.Sprintf("%s %s", r.Method, r.URL.Path),
+			fmt.Sprintf("%s %s", r.Method, normalizedPath),
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
 				attribute.String("http.method", r.Method),
 				attribute.String("http.url", r.URL.String()),
+				attribute.String("http.route", normalizedPath),
 				attribute.String("http.user_agent", r.UserAgent()),
 				attribute.String("http.request_id", r.Header.Get("X-Request-ID")),
 			),
