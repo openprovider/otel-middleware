@@ -41,7 +41,7 @@ type Provider struct {
 func New(ctx context.Context, cfg *Config) (*Provider, error) {
 	// Store config globally so middleware can access it
 	globalConfig = cfg
-	
+
 	// Skip if disabled
 	if !cfg.Enabled {
 		return &Provider{}, nil
@@ -134,14 +134,16 @@ func New(ctx context.Context, cfg *Config) (*Provider, error) {
 	}
 
 	// Create sampler based on sampling rate
-	var sampler sdktrace.Sampler
+	// ParentBased wraps them so that downstream spans honour the upstream sampled flag.
+	var rootSampler sdktrace.Sampler
 	if cfg.SamplingRate >= 1.0 {
-		sampler = sdktrace.AlwaysSample()
+		rootSampler = sdktrace.AlwaysSample()
 	} else if cfg.SamplingRate <= 0.0 {
-		sampler = sdktrace.NeverSample()
+		rootSampler = sdktrace.NeverSample()
 	} else {
-		sampler = sdktrace.TraceIDRatioBased(cfg.SamplingRate)
+		rootSampler = sdktrace.TraceIDRatioBased(cfg.SamplingRate)
 	}
+	sampler := sdktrace.ParentBased(rootSampler)
 
 	// Create trace provider
 	tp := sdktrace.NewTracerProvider(
